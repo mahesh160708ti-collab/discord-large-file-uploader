@@ -1,0 +1,38 @@
+{
+  "name": "discord-large-file-uploader",
+  "version": "1.0.0",
+  "description": "Discord large file uploader with direct browser multipart upload to object storage",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc && node -e \"const fs = require('fs'); fs.mkdirSync('dist/db/migrations', { recursive: true }); fs.copyFileSync('src/db/migrations/001_initial_schema.sql', 'dist/db/migrations/001_initial_schema.sql');\"",
+    "start": "node --env-file=.env dist/index.js",
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy-commands": "tsx --env-file=.env src/bot/deployCommands.ts",
+    "migrate": "tsx --env-file=.env src/db/migrate.ts"
+  },
+  "keywords": ["discord", "file-uploader", "s3", "r2", "fastify"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.540.0",
+    "@aws-sdk/s3-request-presigner": "^3.540.0",
+    "@fastify/cors": "^9.0.1",
+    "@fastify/rate-limit": "^9.1.0",
+    "@fastify/static": "^7.0.1",
+    "discord.js": "^14.14.1",
+    "fastify": "^4.26.2",
+    "pg": "^8.11.3",
+    "pino": "^8.19.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/pg": "^8.11.4",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.3",
+    "vitest": "^1.4.0"
+  }
+}

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Download Shared File</title>
+  <link rel="stylesheet" href="/public/styles.css">
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <h1>Download File</h1>
+        <p>File shared via Discord File Uploader</p>
+      </div>
+
+      <!-- Safety Advisory Badge -->
+      <div class="badge-safety">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        </svg>
+        <div>
+          <strong>Safety Notice:</strong> Never execute unknown files, install suspicious browser extensions, or share your Discord tokens/credentials. If this file looks suspicious, report it below.
+        </div>
+      </div>
+
+      <div id="file-card">
+        <table class="file-info-table">
+          <tr>
+            <td>File Name</td>
+            <td id="meta-filename">Loading...</td>
+          </tr>
+          <tr>
+            <td>Size</td>
+            <td id="meta-size">-</td>
+          </tr>
+          <tr>
+            <td>Expires</td>
+            <td id="meta-expires">-</td>
+          </tr>
+        </table>
+
+        <div id="status-error" class="alert-box alert-danger hidden"></div>
+
+        <button id="download-btn" class="btn">Download File</button>
+        <button id="report-btn" class="btn btn-secondary">Report Suspicious File</button>
+      </div>
+
+      <!-- Report Modal Section -->
+      <div id="report-section" class="hidden" style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--card-border);">
+        <h3 style="font-size: 0.9375rem; margin-bottom: 0.5rem;">Report Malicious File</h3>
+        <p style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+          Report phishing, Discord token grabbers, malware, or illegal material. Multiple reports auto-quarantine this link immediately.
+        </p>
+        <select id="report-reason" style="width: 100%; min-height: 40px; background: #1e293b; color: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 0.5rem; margin-bottom: 0.75rem;">
+          <option value="Malware / Trojan / Token Grabber">Malware / Trojan / Token Grabber</option>
+          <option value="Phishing / Account Takeover Scam">Phishing / Account Takeover Scam</option>
+          <option value="Copyright / Intellectual Property">Copyright / Intellectual Property</option>
+          <option value="Prohibited or Illegal Content">Prohibited or Illegal Content</option>
+          <option value="Spam / Junk Flooding">Spam / Junk Flooding</option>
+        </select>
+        <button id="submit-report-btn" class="btn btn-danger">Submit Abuse Report</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const publicId = window.location.pathname.split('/').filter(Boolean).pop();
+    const filenameEl = document.getElementById('meta-filename');
+    const sizeEl = document.getElementById('meta-size');
+    const expiresEl = document.getElementById('meta-expires');
+    const downloadBtn = document.getElementById('download-btn');
+    const reportBtn = document.getElementById('report-btn');
+    const reportSection = document.getElementById('report-section');
+    const submitReportBtn = document.getElementById('submit-report-btn');
+    const errorBox = document.getElementById('status-error');
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    async function loadMetadata() {
+      try {
+        const res = await fetch(`/api/d/${publicId}/info`);
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'File unavailable.');
+        }
+        const { file } = await res.json();
+        filenameEl.textContent = file.original_filename;
+        sizeEl.textContent = formatBytes(parseInt(file.size_bytes));
+        expiresEl.textContent = new Date(file.expires_at).toLocaleString();
+      } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove('hidden');
+        downloadBtn.disabled = true;
+        downloadBtn.style.opacity = '0.5';
+      }
+    }
+
+    downloadBtn.addEventListener('click', async () => {
+      downloadBtn.textContent = 'Generating Secure Download...';
+      downloadBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/d/${publicId}/url`);
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Failed to generate download URL.');
+        }
+        const { downloadUrl } = await res.json();
+        window.location.href = downloadUrl;
+        setTimeout(() => {
+          downloadBtn.textContent = 'Download Again';
+          downloadBtn.disabled = false;
+        }, 3000);
+      } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove('hidden');
+        downloadBtn.textContent = 'Download Failed';
+      }
+    });
+
+    reportBtn.addEventListener('click', () => {
+      reportSection.classList.toggle('hidden');
+    });
+
+    submitReportBtn.addEventListener('click', async () => {
+      const reason = document.getElementById('report-reason').value;
+      submitReportBtn.disabled = true;
+      submitReportBtn.textContent = 'Submitting...';
+      try {
+        const res = await fetch(`/api/d/${publicId}/report`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason }),
+        });
+        const data = await res.json();
+        if (data.quarantined) {
+          alert('Report received. This file has received multiple complaints and has been quarantined.');
+          window.location.reload();
+        } else {
+          alert('Report submitted successfully. Our automated safety scanners and moderators have been notified.');
+          reportSection.classList.add('hidden');
+        }
+      } catch (err) {
+        alert('Failed to submit report. Please try again.');
+      } finally {
+        submitReportBtn.disabled = false;
+        submitReportBtn.textContent = 'Submit Abuse Report';
+      }
+    });
+
+    loadMetadata();
+  </script>
+</body>
+</html>

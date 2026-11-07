@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord File Uploader</title>
+  <link rel="stylesheet" href="/public/styles.css">
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <h1>Direct Storage Upload</h1>
+        <p>Transfer files up to 2 GB securely directly to object storage</p>
+      </div>
+
+      <div id="upload-step">
+        <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Drop file here or click to browse">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#71717a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          <p><strong>Click to browse</strong> or drag & drop file here</p>
+          <p style="font-size: 0.75rem; color: #71717a;">Maximum size: 2 GB • Fast parallel transfer • Executables (.exe) supported</p>
+          <input type="file" id="file-input" class="hidden">
+        </div>
+
+        <div id="error-message" class="alert-box alert-danger hidden"></div>
+
+        <div id="progress-container" class="progress-container hidden">
+          <div class="progress-track">
+            <div id="progress-bar" class="progress-fill"></div>
+          </div>
+          <div class="progress-stats">
+            <span id="progress-text">0%</span>
+            <span id="speed-text">0 MB/s</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="success-step" class="hidden">
+        <div class="alert-box alert-success" style="margin-bottom: 1.5rem;">
+          <strong>Upload Complete!</strong> Your file is ready to share.
+        </div>
+        <table class="file-info-table">
+          <tr>
+            <td>File Name</td>
+            <td id="res-filename">-</td>
+          </tr>
+          <tr>
+            <td>Size</td>
+            <td id="res-size">-</td>
+          </tr>
+          <tr>
+            <td>Download Link</td>
+            <td id="res-link">-</td>
+          </tr>
+        </table>
+        <input type="text" id="download-link" class="hidden" readonly>
+        <button id="copy-btn" class="btn">Copy Download Link</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const token = window.location.pathname.split('/').filter(Boolean).pop();
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const errorBox = document.getElementById('error-message');
+    const progressContainer = document.getElementById('progress-container');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+    const speedText = document.getElementById('speed-text');
+    const uploadStep = document.getElementById('upload-step');
+    const successStep = document.getElementById('success-step');
+    const downloadInput = document.getElementById('download-link');
+    const copyBtn = document.getElementById('copy-btn');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) {
+        startUpload(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length > 0) {
+        startUpload(fileInput.files[0]);
+      }
+    });
+
+    function showError(msg) {
+      errorBox.textContent = msg;
+      errorBox.classList.remove('hidden');
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    async function startUpload(file) {
+      errorBox.classList.add('hidden');
+
+      // 1. Client-side size check
+      const maxBytes = 2 * 1024 * 1024 * 1024; // 2 GB
+      if (file.size > maxBytes) {
+        return showError('File size exceeds the 2 GB limit.');
+      }
+
+      dropZone.style.pointerEvents = 'none';
+      dropZone.style.opacity = '0.6';
+      progressContainer.classList.remove('hidden');
+
+      try {
+        // 2. Magic byte pre-flight inspection (read first 512 bytes)
+        const headerSlice = file.slice(0, 512);
+        const headerBuffer = await headerSlice.arrayBuffer();
+        const headerBase64 = btoa(String.fromCharCode(...new Uint8Array(headerBuffer)));
+
+        const verifyRes = await fetch(`/api/upload-session/${token}/verify-chunk-1`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ headerBase64, filename: file.name }),
+        });
+
+        if (!verifyRes.ok) {
+          const errData = await verifyRes.json();
+          throw new Error(errData.error || 'Disguised executable binary detected.');
+        }
+
+        // 3. Initiate multipart upload
+        const initRes = await fetch(`/api/upload-session/${token}/initiate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: file.name,
+            sizeBytes: file.size,
+            contentType: file.type || 'application/octet-stream',
+          }),
+        });
+
+        if (!initRes.ok) {
+          const errData = await initRes.json();
+          throw new Error(errData.error || 'Failed to initiate upload.');
+        }
+
+        const { uploadId, chunkSize } = await initRes.json();
+        const totalParts = Math.max(1, Math.ceil(file.size / chunkSize));
+        const partNumbers = Array.from({ length: totalParts }, (_, i) => i + 1);
+
+        // 4. Request presigned URLs in batches
+        const urlsRes = await fetch(`/api/upload-session/${token}/part-urls`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ partNumbers }),
+        });
+
+        if (!urlsRes.ok) {
+          throw new Error('Failed to obtain presigned upload URLs.');
+        }
+
+        const { urls } = await urlsRes.json();
+        const uploadedParts = new Array(totalParts);
+        const partBytes = new Array(totalParts).fill(0);
+        const startTime = Date.now();
+
+        // 5. High-speed parallel chunk uploads with concurrency = 4
+        const CONCURRENCY = Math.min(4, totalParts);
+        let currentIndex = 0;
+
+        function updateProgress() {
+          const bytesUploaded = partBytes.reduce((sum, b) => sum + b, 0);
+          const percent = Math.min(100, Math.round((bytesUploaded / file.size) * 100));
+          progressBar.style.width = percent + '%';
+          progressText.textContent = `${percent}% (${formatBytes(bytesUploaded)} / ${formatBytes(file.size)})`;
+
+          const elapsedSec = (Date.now() - startTime) / 1000;
+          if (elapsedSec > 0.3) {
+            const speed = bytesUploaded / (1024 * 1024 * elapsedSec);
+            speedText.textContent = `${speed.toFixed(1)} MB/s`;
+          }
+        }
+
+        async function uploadChunkWithRetry(index, retries = 2) {
+          const partNumber = index + 1;
+          const start = index * chunkSize;
+          const end = Math.min(file.size, start + chunkSize);
+          const chunk = file.slice(start, end);
+          const presignedUrl = urls[index];
+
+          for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+              const res = await fetch(presignedUrl, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: chunk,
+              });
+
+              if (!res.ok) {
+                throw new Error(`Server returned ${res.status}`);
+              }
+
+              const etag = res.headers.get('ETag');
+              if (!etag) {
+                throw new Error(`Missing ETag for chunk #${partNumber}`);
+              }
+
+              uploadedParts[index] = { PartNumber: partNumber, ETag: etag };
+              partBytes[index] = chunk.size;
+              updateProgress();
+              return;
+            } catch (err) {
+              if (attempt === retries) throw err;
+              await new Promise(r => setTimeout(r, 800));
+            }
+          }
+        }
+
+        async function worker() {
+          while (currentIndex < totalParts) {
+            const index = currentIndex++;
+            await uploadChunkWithRetry(index);
+          }
+        }
+
+        // Run concurrent workers simultaneously
+        await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+
+        // 6. Complete multipart upload
+        const completeRes = await fetch(`/api/upload-session/${token}/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parts: uploadedParts }),
+        });
+
+        if (!completeRes.ok) {
+          const errData = await completeRes.json();
+          throw new Error(errData.error || 'Failed to finalize upload.');
+        }
+
+        const { file: savedFile } = await completeRes.json();
+        const downloadUrl = `${window.location.origin}/d/${savedFile.public_id}`;
+
+        uploadStep.classList.add('hidden');
+        successStep.classList.remove('hidden');
+        document.getElementById('res-filename').textContent = savedFile.original_filename;
+        document.getElementById('res-size').textContent = formatBytes(parseInt(savedFile.size_bytes));
+        document.getElementById('res-link').textContent = downloadUrl;
+        downloadInput.value = downloadUrl;
+      } catch (err) {
+        dropZone.style.pointerEvents = 'auto';
+        dropZone.style.opacity = '1';
+        progressContainer.classList.add('hidden');
+        showError(err.message || 'Upload failed.');
+      }
+    }
+
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(downloadInput.value).then(() => {
+        copyBtn.textContent = 'Copied to Clipboard!';
+        setTimeout(() => { copyBtn.textContent = 'Copy Download Link'; }, 2000);
+      });
+    });
+  </script>
+</body>
+</html>
